@@ -1,15 +1,28 @@
 use std::{path::PathBuf, process::Command};
 
 use cargo_toml::{DependencyDetail, Manifest};
+use clap::CommandFactory;
+use clap::Parser;
+use clap_complete::generate;
+
+use clap_complete::shells::PowerShell;
+use clap_complete::Generator;
+use clap_complete::Shell;
+
 use indicatif::ProgressBar;
 use indicatif::ProgressStyle;
+use std::io;
 use which::which;
 use yansi::Paint;
 
-use clap::Parser;
-
-#[derive(Parser, Debug)]
-#[clap(author, version, about)]
+#[derive(Parser, Debug, PartialEq)]
+#[clap(
+    name = "install-from-manifest",
+    author,
+    version,
+    about,
+    trailing_var_arg = true
+)]
 struct Args {
     /// Path to the manifest
     #[clap()]
@@ -24,14 +37,31 @@ struct Args {
 
     #[clap(short, long)]
     verbose: bool,
+
+    #[clap(flatten)]
+    workspace: clap_cargo::Workspace,
+
+    #[clap(flatten)]
+    manifest: clap_cargo::Manifest,
+
+    #[clap(long = "generate", arg_enum)]
+    generator: Option<Shell>,
 }
 
+fn print_completions<G: Generator>(gen: G, cmd: &mut clap::Command) {
+    generate(gen, cmd, cmd.get_name().to_string(), &mut io::stdout());
+}
+
+// use https://github.com/rust-cli/clap-verbosity-flag
+// use https://github.com/crate-ci/clap-cargo
+// use https://docs.rs/clap_complete/latest/clap_complete/
+// use https://crates.io/crates/clap_complete_fig
 // TODO use proper error handling/returning
 // TODO implement verbose & silent
 // TODO implement force
 // TODO cicd
-
-fn build_args<'a>(details: &'a DependencyDetail) -> Vec<String> {
+// TODO auto complete
+fn build_args(details: &'_ DependencyDetail) -> Vec<String> {
     let mut args = Vec::new();
 
     if let Some(version) = &details.version {
@@ -134,11 +164,20 @@ fn handle_command_output(mut command: Command, silent: bool, verbose: bool) -> b
         );
     }
 
-    return output.status.success();
+    output.status.success()
 }
 
 fn main() {
+    print_completions(PowerShell, &mut Args::command());
+
+    let input_args = std::env::args().collect::<Vec<_>>();
+
+    println!("{}", input_args.join(","));
+
     let arguments = Args::parse();
+
+    println!("{:?}", arguments.workspace);
+    println!("{:?}", arguments.manifest);
 
     let path = if arguments.manifest_path.is_dir() {
         arguments.manifest_path.join("Cargo.toml")
@@ -178,8 +217,7 @@ fn main() {
         match dependency {
             cargo_toml::Dependency::Simple(version) => {
                 bar.set_message(name.to_owned());
-                if which("cargo-binstall").is_err()
-                    || !handle_command_output(
+                if (which("cargo-binstall").is_err() || !handle_command_output(
                         build_command(
                             CommandKind::Binstall,
                             name.to_owned(),
@@ -187,9 +225,7 @@ fn main() {
                         ),
                         true,
                         arguments.verbose,
-                    )
-                {
-                    if !handle_command_output(
+                    )) && !handle_command_output(
                         build_command(
                             CommandKind::CargoInstall,
                             name.to_owned(),
@@ -198,30 +234,28 @@ fn main() {
                         true,
                         arguments.verbose,
                     ) {
-                        panic!("Failed to install");
-                    }
+                    panic!("Failed to install");
                 }
                 bar.inc(1);
             }
             cargo_toml::Dependency::Detailed(details) => {
-                let name = details.package.to_owned().unwrap_or(name.to_owned());
+                let name = details
+                    .package
+                    .to_owned()
+                    .unwrap_or_else(|| name.to_owned());
 
                 let args = build_args(details);
 
-                if which("cargo-binstall").is_err()
-                    || !handle_command_output(
+                if (which("cargo-binstall").is_err() || !handle_command_output(
                         build_command(CommandKind::Binstall, name.to_owned(), Some(&args)),
                         true,
                         arguments.verbose,
-                    )
-                {
-                    if !handle_command_output(
+                    )) && !handle_command_output(
                         build_command(CommandKind::CargoInstall, name.to_owned(), Some(&args)),
                         true,
                         arguments.verbose,
                     ) {
-                        panic!("Failed to install");
-                    }
+                    panic!("Failed to install");
                 }
 
                 bar.set_message(name.to_owned());
