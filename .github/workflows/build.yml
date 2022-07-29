@@ -1,0 +1,122 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches:
+      - "*"
+
+env:
+  CROSS_CONTAINER_ENGINE: podman
+
+jobs:
+  build-native:
+    name: Build on native hardware
+    strategy:
+      fail-fast: false
+      matrix:
+        toolchain:
+          - stable
+          - beta
+          - nightly
+        config:
+          - node: ubuntu-latest
+          - node: windows-latest
+          - node: macos-latest
+    runs-on: ${{ matrix.config.node }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3.0.2
+
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: ${{ matrix.toolchain }}
+          override: true
+
+      - uses: Swatinem/rust-cache@v2.0.0
+
+      - name: Build Debug
+        run: cargo build --all-features --workspace  --all-targets
+
+      - name: Build Release
+        run: cargo build --release --all-features --workspace --all-targets
+
+  build-cross:
+    name: Build for foreign hardware via cross
+    strategy:
+      fail-fast: false
+      matrix:
+        toolchain:
+          - stable
+          - beta
+          - nightly
+        config:
+          # linux aarch64
+          - node: ubuntu-latest
+            arch: aarch64-unknown-linux-gnu
+          - node: ubuntu-latest
+            arch: aarch64-unknown-linux-musl
+
+          # linux x86
+          - node: ubuntu-latest
+            arch: x86_64-unknown-linux-gnu
+          - node: ubuntu-latest
+            arch: x86_64-unknown-linux-musl
+          - node: ubuntu-latest
+            arch: x86_64-linux-android
+
+          # windows aarch64
+          - node: windows-latest
+            arch: aarch64-pc-windows-msvc
+          - node: windows-latest
+            arch: x86_64-pc-windows-msvc
+          
+          # apple aarch64
+          - node: macos-latest
+            arch: aarch64-apple-darwin
+
+    runs-on: ${{ matrix.config.node }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3.0.2
+      
+      - name: Install
+        run: cargo install cross
+
+      - name: Use Podman
+        run: echo "CROSS_CONTAINER_ENGINE=podman" >> $GITHUB_ENV
+
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+      
+      - name: Add target
+        run: rustup target add ${{ matrix.config.arch }}
+      
+      - name: Build Debug
+        run: cross build --target ${{ matrix.config.arch }} --all-features --workspace  --all-targets
+      
+      - name: Build Release
+        run: cross build --target ${{ matrix.config.arch }} --all-features --release --workspace  --all-targets
+  
+  container:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository and submodules
+        uses: actions/checkout@v3
+        with:
+          submodules: recursive
+      - name: Install qemu dependency
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qemu-user-static
+
+      - name: Buildah Action
+        uses: redhat-actions/buildah-build@v2
+        with:
+          containerfiles: |
+            Containerfile
+          platforms: linux/amd64,linux/arm64
+          image: ci
